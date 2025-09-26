@@ -1,0 +1,245 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "ad8f09ea",
+   "metadata": {
+    "papermill": {
+     "duration": 0.002338,
+     "end_time": "2025-09-26T17:59:44.004464",
+     "exception": false,
+     "start_time": "2025-09-26T17:59:44.002126",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "This notebook demonstrates an analytics workflow for joint analysis of monthly sales, rolling forecasts, and forecast accuracy in demand planning. The scenario, dataset, and requirements are inspired by a professional assignment, generalized for learning.\n",
+    "\n",
+    "**Context**\n",
+    "Accurate demand forecasting is essential for inventory management and strategic planning. The core task is to evaluate how well forecasts match realized sales across product categories and locations, and to surface where accuracy is strong or weak over time.\n",
+    "\n",
+    "**Dataset**\n",
+    "\n",
+    "The dataset simulates:\n",
+    "\n",
+    "* Monthly sales by ProductID, LocationID, and month.\n",
+    "* Rolling forecast submissions, where each submission month provides forecasts for the next six planned months.\n",
+    "* Product and location hierarchies.\n",
+    "* All data is artificial and free of company identifiers.\n",
+    "\n",
+    "**Metric and aggregation logic**\n",
+    "\n",
+    "* Latest forecast rule: for each ProductID, LocationID, and PlannedMonth, select the forecast with the most recent SubmissionMonth.\n",
+    "* Forecast Accuracy %:\n",
+    "$ 1-\\frac{\\sum{\\left| Sales - Forecast \\right|}^{}}{\\sum_{}^{}\\left| Forecast \\right|} $\n",
+    "Calculated at the product–location–month level, then aggregated.\n",
+    "* For monthly trend visuals, the metric is evaluated month by month.\n",
+    "\n",
+    "**Approach**\n",
+    "\n",
+    "We will:\n",
+    "* Load and inspect the dataset.\n",
+    "* Build the “latest forecast” table and align it with sales.\n",
+    "* Compute KPIs and accuracy measures.\n",
+    "* Visualize trends, rankings by market, and a heatmap by product and region.\n",
+    "* Note assumptions and design decisions along the way.\n",
+    "\n",
+    "**Tools**\n",
+    "\n",
+    "Python, pandas, numpy, plotly or matplotlib for charts."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "fc3dfea0",
+   "metadata": {
+    "papermill": {
+     "duration": 0.001431,
+     "end_time": "2025-09-26T17:59:44.008122",
+     "exception": false,
+     "start_time": "2025-09-26T17:59:44.006691",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "# **Dataset Loading and Inspection**"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "b2c7644f",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2025-09-26T17:59:44.013611Z",
+     "iopub.status.busy": "2025-09-26T17:59:44.012845Z",
+     "iopub.status.idle": "2025-09-26T17:59:47.715642Z",
+     "shell.execute_reply": "2025-09-26T17:59:47.714158Z"
+    },
+    "papermill": {
+     "duration": 3.707182,
+     "end_time": "2025-09-26T17:59:47.717381",
+     "exception": false,
+     "start_time": "2025-09-26T17:59:44.010199",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "   SalesMonth  ProductID  LocationID  Quantity\n",
+      "0  01.06.2024     123456        1001       674\n",
+      "1  01.06.2024     123456        2001       551\n",
+      "2  01.06.2024     123456        3001       115\n",
+      "3  01.06.2024     123456        4001       610\n",
+      "4  01.06.2024     123456        5001       675\n",
+      "  SubmissionMonth PlannedMonth  ProductID  LocationID  Quantity\n",
+      "0      01.01.2024   01.02.2024     123456        1001       648\n",
+      "1      01.01.2024   01.02.2024     123456        2001       120\n",
+      "2      01.01.2024   01.02.2024     123456        3001       294\n",
+      "3      01.01.2024   01.02.2024     123456        4001       463\n",
+      "4      01.01.2024   01.02.2024     123456        5001       611\n",
+      "   ProductID     ProductSubCat        ProductCat\n",
+      "0     123456    Clothes Dryers  Major Appliances\n",
+      "1     123457          Freezers  Major Appliances\n",
+      "2     123458             Ovens  Major Appliances\n",
+      "3     123459  Electric Kettles  Minor Appliances\n",
+      "4     123460    Clothes Dryers  Major Appliances\n",
+      "   LocationID      Country          Region\n",
+      "0        1001  Netherlands  Western Europe\n",
+      "1        2001        Spain          Iberia\n",
+      "2        3001     Portugal          Iberia\n",
+      "3        4001   Luxembourg  Western Europe\n",
+      "4        5001      Hungary  Eastern Europe\n"
+     ]
+    }
+   ],
+   "source": [
+    "import pandas as pd\n",
+    "\n",
+    "# Load sales data\n",
+    "sales2024 = pd.read_excel(\"../input/forecast-accuracy-demo-dataset/artificialdata_demand_forecast.xlsx\", sheet_name=\"Sales2024\")\n",
+    "sales2025 = pd.read_excel(\"../input/forecast-accuracy-demo-dataset/artificialdata_demand_forecast.xlsx\", sheet_name=\"Sales2025\")\n",
+    "\n",
+    "# Load forecast data\n",
+    "forecast = pd.read_excel(\"../input/forecast-accuracy-demo-dataset/artificialdata_demand_forecast.xlsx\", sheet_name=\"Forecast\")\n",
+    "\n",
+    "# Load dimensions\n",
+    "products = pd.read_excel(\"../input/forecast-accuracy-demo-dataset/artificialdata_demand_forecast.xlsx\", sheet_name=\"Products\")\n",
+    "locations = pd.read_excel(\"../input/forecast-accuracy-demo-dataset/artificialdata_demand_forecast.xlsx\", sheet_name=\"Locations\")\n",
+    "\n",
+    "# Merge sales tables into one\n",
+    "sales = pd.concat([sales2024, sales2025], ignore_index=True)\n",
+    "\n",
+    "# Quick inspection\n",
+    "print(sales.head())\n",
+    "print(forecast.head())\n",
+    "print(products.head())\n",
+    "print(locations.head())\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "69c6dc33",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2025-09-26T17:59:47.722615Z",
+     "iopub.status.busy": "2025-09-26T17:59:47.722215Z",
+     "iopub.status.idle": "2025-09-26T17:59:47.732712Z",
+     "shell.execute_reply": "2025-09-26T17:59:47.731567Z"
+    },
+    "papermill": {
+     "duration": 0.0151,
+     "end_time": "2025-09-26T17:59:47.734494",
+     "exception": false,
+     "start_time": "2025-09-26T17:59:47.719394",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "/kaggle/input/forecast-accuracy-demo-dataset/artifitialdata_demand_forecast.xlsx\n",
+      "/kaggle/input/forecast-accuracy-demo-dataset/artificialdata_demand_forecast.xlsx\n"
+     ]
+    }
+   ],
+   "source": [
+    "\n",
+    "# It is defined by the kaggle/python Docker image: https://github.com/kaggle/docker-python\n",
+    "# For example, here's several helpful packages to load\n",
+    "\n",
+    "import numpy as np # linear algebra\n",
+    "import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)\n",
+    "\n",
+    "# Input data files are available in the read-only \"../input/\" directory\n",
+    "# For example, running this (by clicking run or pressing Shift+Enter) will list all files under the input directory\n",
+    "\n",
+    "import os\n",
+    "for dirname, _, filenames in os.walk('/kaggle/input'):\n",
+    "    for filename in filenames:\n",
+    "        print(os.path.join(dirname, filename))\n",
+    "\n",
+    "# You can write up to 20GB to the current directory (/kaggle/working/) that gets preserved as output when you create a version using \"Save & Run All\" \n",
+    "# You can also write temporary files to /kaggle/temp/, but they won't be saved outside of the current session"
+   ]
+  }
+ ],
+ "metadata": {
+  "kaggle": {
+   "accelerator": "none",
+   "dataSources": [
+    {
+     "datasetId": 8353183,
+     "sourceId": 13181800,
+     "sourceType": "datasetVersion"
+    }
+   ],
+   "dockerImageVersionId": 31089,
+   "isGpuEnabled": false,
+   "isInternetEnabled": true,
+   "language": "python",
+   "sourceType": "notebook"
+  },
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.11.13"
+  },
+  "papermill": {
+   "default_parameters": {},
+   "duration": 10.240007,
+   "end_time": "2025-09-26T17:59:48.357176",
+   "environment_variables": {},
+   "exception": null,
+   "input_path": "__notebook__.ipynb",
+   "output_path": "__notebook__.ipynb",
+   "parameters": {},
+   "start_time": "2025-09-26T17:59:38.117169",
+   "version": "2.6.0"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
